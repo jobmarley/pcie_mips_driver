@@ -51,6 +51,8 @@ Return Value:
     NTSTATUS status;
     WDF_IO_QUEUE_CONFIG queueConfig;
 
+    PDEVICE_CONTEXT deviceContext = DeviceGetContext(Device);
+
     PAGED_CODE();
 
     //
@@ -74,6 +76,26 @@ Return Value:
                  WDF_NO_OBJECT_ATTRIBUTES,
                  &queue
                  );
+
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "WdfIoQueueCreate failed %!STATUS!", status);
+        return status;
+    }
+
+    // This is a manual dispatching queue that is used for notification of events (breakpoint typically)
+    WDF_IO_QUEUE_CONFIG invertedCallQueueConfig;
+    WDF_IO_QUEUE_CONFIG_INIT(
+        &invertedCallQueueConfig,
+        WdfIoQueueDispatchManual
+    );
+    WDFQUEUE invertedCallQueue;
+    status = WdfIoQueueCreate(
+        Device,
+        &invertedCallQueueConfig,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &invertedCallQueue
+    );
+    deviceContext->InvertedCallQueue = invertedCallQueue;
 
     if(!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "WdfIoQueueCreate failed %!STATUS!", status);
@@ -132,6 +154,8 @@ VOID pciemipsdriverEvtIoWrite(
 }
 #define PCIE_MIPS_IOCTRL_WRITE_REG 0x1
 #define PCIE_MIPS_IOCTRL_READ_REG 0x2
+#define PCIE_MIPS_IOCTRL_WAIT_BREAK 0x3
+
 typedef struct
 {
     ULONGLONG address;
@@ -163,6 +187,11 @@ pciemipsdriverEvtIoDeviceControl(
 
     switch (params.Parameters.DeviceIoControl.IoControlCode)
     {
+    case PCIE_MIPS_IOCTRL_WAIT_BREAK:
+    {
+        WdfRequestForwardToIoQueue(Request, deviceContext->InvertedCallQueue);
+        break;
+    }
     case PCIE_MIPS_IOCTRL_WRITE_REG:
     {
         PPCIE_MIPS_WRITE_REG_DATA data = NULL;

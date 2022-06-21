@@ -51,6 +51,13 @@ VOID pciemipsdriverInterruptDPC(_In_ WDFINTERRUPT Interrupt, _In_ WDFOBJECT Asso
             WRITE_REGISTER_ULONG(&deviceContext->MipsRegisters->Status, mipsStatus & ~MIPS_STATUS_BREAK);
             userIntPending = READ_REGISTER_ULONG(&deviceContext->XDMARegisters.IRQBlock[IRQ_BLOCK_USER_INT_PENDING]);
 
+            // We check if a request is in the queue, and we complete it
+            WDFREQUEST request;
+            WdfIoQueueRetrieveNextRequest(deviceContext->InvertedCallQueue, &request);
+            if (request != NULL)
+            {
+                WdfRequestComplete(request, STATUS_SUCCESS);
+            }
         }
     }
     if (H2CChannelIndex != -1)

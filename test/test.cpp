@@ -6,6 +6,8 @@
 #include <sstream>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 
 #include <Windows.h>
 #include <setupapi.h>
@@ -43,7 +45,7 @@ BOOL FindBestInterface(HDEVINFO DeviceInfoSet, PSP_DEVINFO_DATA pDeviceInfoData,
 
     return TRUE;
 }
-HANDLE CreateDevice()
+HANDLE CreateDevice(PHANDLE phAsync)
 {
     HDEVINFO DeviceInfoSet = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_pciemipsdriver, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
 
@@ -64,6 +66,11 @@ HANDLE CreateDevice()
         {
             std::wstring devicePath = GetInterfacePath(DeviceInfoSet, &DeviceInterfaceData);
             HANDLE hFile = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+            // We DO absolutely need 2 handles, otherwise DeviceIoControl fails because overlapped is NULL
+            if (phAsync)
+            {
+                *phAsync = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+            }
             return hFile;
         }
     }
@@ -105,6 +112,7 @@ void writemem(HANDLE h, const std::vector<uint8_t>& buffer)
 }
 #define PCIE_MIPS_IOCTRL_WRITE_REG 0x1
 #define PCIE_MIPS_IOCTRL_READ_REG 0x2
+#define PCIE_MIPS_IOCTRL_WAIT_BREAK 0x3
 
 struct PCIE_MIPS_WRITE_REG_DATA
 {
@@ -187,15 +195,96 @@ bool ReadDataLine(std::vector<uint8_t>& buffer, int ofs)
     }
     return true;
 }
+
+struct BreakpointCallbackInfo
+{
+    std::mutex mutex;
+    HANDLE hDevice;
+    HANDLE hEvent;
+    HANDLE hWaitHandle;
+    OVERLAPPED overlapped;
+};
+std::vector<std::unique_ptr<BreakpointCallbackInfo>> g_callbackInfoList;
+
+void BreakpointCallback(PVOID lpParameter, BOOLEAN TimerOrWaitFired)
+{
+    BreakpointCallbackInfo* pInfo = (BreakpointCallbackInfo*)lpParameter;
+    std::cout << "A breakpoint was triggered" << std::endl;
+
+    std::lock_guard<std::mutex> lock(pInfo->mutex);
+	if (pInfo->hDevice != NULL)
+	{
+		// We requeue the request
+		ZeroMemory(&pInfo->overlapped, sizeof(pInfo->overlapped));
+		pInfo->overlapped.hEvent = pInfo->hEvent;
+		// Dont check for success because... what should we do anyway, log it?
+		DeviceIoControl(pInfo->hDevice, PCIE_MIPS_IOCTRL_WAIT_BREAK, NULL, 0, NULL, 0, NULL, &pInfo->overlapped);
+	}
+}
+void CreateBreakpointCallbacks(HANDLE hDevice, int count)
+{
+    for (int i = 0; i < count; ++i)
+    {
+        HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+        if (hEvent == NULL)
+        {
+            std::cout << "CreateEvent returned NULL" << std::endl;
+            throw std::exception();
+        }
+        std::unique_ptr<BreakpointCallbackInfo> pInfo = std::make_unique<BreakpointCallbackInfo>();
+        pInfo->hDevice = hDevice;
+        pInfo->hEvent = hEvent;
+
+        // Register a callback for this event
+        HANDLE hWaitHandle = NULL;
+        if (!RegisterWaitForSingleObject(&hWaitHandle, hEvent, BreakpointCallback, pInfo.get(), INFINITE, WT_EXECUTEDEFAULT))
+        {
+            std::cout << "RegisterWaitForSingleObject returned 0" << std::endl;
+            throw std::exception();
+        }
+
+        pInfo->hWaitHandle = hWaitHandle;
+
+        ZeroMemory(&pInfo->overlapped, sizeof(pInfo->overlapped));
+        pInfo->overlapped.hEvent = hEvent;
+        
+        DeviceIoControl(hDevice, PCIE_MIPS_IOCTRL_WAIT_BREAK, NULL, 0, NULL, 0, NULL, &pInfo->overlapped);
+		DWORD err = GetLastError();
+		if (err != ERROR_IO_PENDING)
+		{
+			std::cout << "DeviceIoControl failed with error code " << err << std::endl;
+			throw std::exception();
+		}
+        g_callbackInfoList.push_back(std::move(pInfo));
+    }
+    std::cout << "Created " << count << " breakpoint callbacks" << std::endl;
+}
+void DestroyBreakpointCallbacks()
+{
+    for (auto& it : g_callbackInfoList)
+	{
+		std::lock_guard<std::mutex> lock(it->mutex);
+		CancelIoEx(it->hDevice, &it->overlapped);
+		UnregisterWait(it->hWaitHandle);
+		CloseHandle(it->hEvent);
+		it->hDevice = NULL;
+		it->hWaitHandle = NULL;
+		it->hEvent = NULL;
+	}
+    // overlapped must not be freed before the operations have completed
+}
 int main()
 {
-    HANDLE h = CreateDevice();
-    if (!h)
+    HANDLE hAsync = NULL;
+    HANDLE h = CreateDevice(&hAsync);
+    if (!h || !hAsync)
     {
         std::cout << "CreateDevice failed" << std::endl;
         return 1;
     }
-    std::cout << "Created device successfully, handle: 0x" << std::hex << std::setfill('0') << h << std::endl;
+    std::cout << "Created device successfully, handle: 0x" << std::hex << std::setfill('0') << h << ", 0x" << hAsync << std::endl;
+
+    CreateBreakpointCallbacks(hAsync, 2);
 
     while (true)
     {
@@ -378,7 +467,9 @@ int main()
         }
     }
 
+    DestroyBreakpointCallbacks();
     CloseHandle(h);
+    CloseHandle(hAsync);
     std::cout << "Done." << std::endl;
     return 0;
 }

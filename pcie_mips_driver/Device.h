@@ -58,7 +58,7 @@ typedef struct _DEVICE_CONTEXT
     WDFINTERRUPT Interrupt;
     XDMA_REGISTERS XDMARegisters;
     PPCIE_MIPS_REGISTERS MipsRegisters;
-
+    WDFQUEUE InvertedCallQueue;
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
 #pragma pack(push, 1)
