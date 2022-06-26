@@ -234,6 +234,9 @@ Return Value:
     pnpPowerCallbacks.EvtDeviceReleaseHardware = pciemipsdriverEvtDeviceReleaseHardware;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpPowerCallbacks);
 
+    // Exclusive access, only 1 handle can be oppened
+    WdfDeviceInitSetExclusive(DeviceInit, TRUE);
+
     status = pciemipsdriverCreateDevice(DeviceInit);
 
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
