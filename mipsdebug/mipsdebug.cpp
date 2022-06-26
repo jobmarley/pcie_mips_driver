@@ -11,16 +11,18 @@ struct breakpoint_callback_info
 {
     std::mutex mutex;
     md_handle_t device = nullptr;
-    HANDLE hEvent = 0;
-    HANDLE hWaitHandle = 0;
+    HANDLE hEvent = NULL;
+    HANDLE hWaitHandle = NULL;
     OVERLAPPED overlapped = {};
 };
 
 struct md_handle
 {
-    HANDLE hDevice;
-    HANDLE hDeviceAsync;
-    md_callback_t callback;
+    HANDLE hDevice = NULL;
+    std::mutex mutex;
+    OVERLAPPED overlapped = {}; // This is used for synchronous operations (memory read/write)
+    HANDLE hEvent = NULL;       // This is used for synchronous operations (memory read/write)
+    md_callback_t callback = nullptr;
     std::vector<std::unique_ptr<breakpoint_callback_info>> callbackInfoList;
 };
 #define PCIE_MIPS_IOCTRL_WRITE_REG 0x1
@@ -70,7 +72,6 @@ md_handle_t md_open()
 
     md_handle* handle = nullptr;
     HANDLE hFile = NULL;
-    HANDLE hFileAsync = NULL;
 
     while (SetupDiEnumDeviceInfo(
         DeviceInfoSet,
@@ -83,30 +84,29 @@ md_handle_t md_open()
         if (FindBestInterface(DeviceInfoSet, &DeviceInfoData, &DeviceInterfaceData))
         {
             std::wstring devicePath = GetInterfacePath(DeviceInfoSet, &DeviceInterfaceData);
-            hFile = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-            // We DO absolutely need 2 handles, otherwise DeviceIoControl fails because overlapped is NULL
-            hFileAsync = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+            hFile = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
             
             break;
         }
     }
 
+    HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
     if (DeviceInfoSet) {
         SetupDiDestroyDeviceInfoList(DeviceInfoSet);
     }
-    if (hFile != INVALID_HANDLE_VALUE && hFileAsync != INVALID_HANDLE_VALUE)
+    if (hFile != INVALID_HANDLE_VALUE && hEvent != NULL)
     {
         handle = new md_handle;
-        ZeroMemory(handle, sizeof(md_handle));
         handle->hDevice = hFile;
-        handle->hDeviceAsync = hFileAsync;
+        handle->hEvent = hEvent;
     }
     else
     {
-        if (hFile != INVALID_HANDLE_VALUE)
+        if (hFile != NULL && hFile != INVALID_HANDLE_VALUE)
             CloseHandle(hFile);
-        if (hFileAsync != INVALID_HANDLE_VALUE)
-            CloseHandle(hFileAsync);
+        if (hEvent != NULL)
+            CloseHandle(hEvent);
     }
 
     return handle;
@@ -122,7 +122,7 @@ bool queue_breakpoint_callback(breakpoint_callback_info* info)
         // We requeue the request
         ZeroMemory(&info->overlapped, sizeof(info->overlapped));
         info->overlapped.hEvent = info->hEvent;
-        DeviceIoControl(device->hDeviceAsync, PCIE_MIPS_IOCTRL_WAIT_BREAK, NULL, 0, NULL, 0, NULL, &info->overlapped);
+        DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_WAIT_BREAK, NULL, 0, NULL, 0, NULL, &info->overlapped);
         DWORD err = GetLastError();
         return err == ERROR_IO_PENDING;
     }
@@ -142,58 +142,70 @@ void breakpoint_callback(PVOID lpParameter, BOOLEAN TimerOrWaitFired)
 
     queue_breakpoint_callback(info);
 }
+
+void cleanup_callback_info(breakpoint_callback_info* info)
+{
+    auto device = info->device;
+    info->device = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(info->mutex);
+        CancelIoEx(device->hDevice, &info->overlapped);
+    }
+    DWORD bytesTransferred = 0;
+    BOOL b = GetOverlappedResult(device->hDevice, &info->overlapped, &bytesTransferred, TRUE);
+    if (info->hWaitHandle && info->hWaitHandle != INVALID_HANDLE_VALUE)
+        UnregisterWait(info->hWaitHandle);
+    if (info->hEvent && info->hEvent != INVALID_HANDLE_VALUE)
+        CloseHandle(info->hEvent);
+    info->hWaitHandle = NULL;
+    info->hEvent = NULL;
+}
+void destroy_breakpoint_callbacks(md_handle_t device)
+{
+    for (auto& it : device->callbackInfoList)
+        cleanup_callback_info(it.get());
+    device->callbackInfoList.clear();
+}
+
 bool create_breakpoint_callbacks(md_handle_t device, int count)
 {
+    bool success = true;
     for (int i = 0; i < count; ++i)
     {
         HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
         if (hEvent == NULL)
         {
-            return false;
+            success = false;
+            break;
         }
-        std::unique_ptr<breakpoint_callback_info> info = std::make_unique<breakpoint_callback_info>();
+        std::unique_ptr<breakpoint_callback_info> uinfo = std::make_unique<breakpoint_callback_info>();
+        breakpoint_callback_info* info = uinfo.get();
+        device->callbackInfoList.push_back(std::move(uinfo));
+
         info->device = device;
         info->hEvent = hEvent;
 
         // Register a callback for this event
         HANDLE hWaitHandle = NULL;
-        if (!RegisterWaitForSingleObject(&hWaitHandle, hEvent, breakpoint_callback, info.get(), INFINITE, WT_EXECUTEDEFAULT))
+        if (!RegisterWaitForSingleObject(&hWaitHandle, hEvent, breakpoint_callback, info, INFINITE, WT_EXECUTEDEFAULT))
         {
-            CloseHandle(hEvent);
-            return false;
+            success = false;
+            break;
         }
 
         info->hWaitHandle = hWaitHandle;
 
-        if (!queue_breakpoint_callback(info.get()))
+        if (!queue_breakpoint_callback(info))
         {
-            UnregisterWait(hWaitHandle);
-            CloseHandle(hEvent);
-            return false;
+            success = false;
+            break;
         }
-        device->callbackInfoList.push_back(std::move(info));
     }
-    return true;
+    if (!success)
+        destroy_breakpoint_callbacks(device);
+    return success;
 }
-void destroy_breakpoint_callbacks(md_handle_t device)
-{
-    for (auto& it : device->callbackInfoList)
-    {
-        it->device = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(it->mutex);
-            CancelIoEx(device->hDeviceAsync, &it->overlapped);
-        }
-        DWORD bytesTransferred = 0;
-        BOOL b = GetOverlappedResult(device->hDeviceAsync, &it->overlapped, &bytesTransferred, TRUE);
-        UnregisterWait(it->hWaitHandle);
-        CloseHandle(it->hEvent);
-        it->device = nullptr;
-        it->hWaitHandle = NULL;
-        it->hEvent = NULL;
-    }
-    device->callbackInfoList.clear();
-}
+
 
 md_status_e md_register_callback(md_handle_t device, md_callback_t c)
 {
@@ -226,81 +238,146 @@ md_status_e md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, 
     if (device == nullptr || buffer == nullptr || count == 0)
         return md_status_invalid_arg;
 
-    SetFilePointer(device->hDevice, offset, NULL, FILE_BEGIN);
+    if (readcount != nullptr)
+        *readcount = 0;
+
+    std::lock_guard<std::mutex> lock(device->mutex);
+    ZeroMemory(&device->overlapped, sizeof(device->overlapped));
+    device->overlapped.Offset = offset;
+
+    if (!ResetEvent(device->hEvent))
+        return md_status_failure;
+
     DWORD BytesRead = 0;
-    BOOL b = ReadFile(device->hDevice, buffer, count, &BytesRead, NULL);
+    BOOL b = ReadFile(device->hDevice, buffer, count, NULL, &device->overlapped);
+    if (!b && GetLastError() != ERROR_IO_PENDING)
+        return md_status_failure;
+
+    if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesRead, TRUE))
+        return md_status_failure;
 
     if (readcount != nullptr)
         *readcount = BytesRead;
-    return b ? md_status_success : md_status_failure;
+    return md_status_success;
 }
 md_status_e md_write_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* writtencount)
 {
     if (device == nullptr || buffer == nullptr || count == 0)
         return md_status_invalid_arg;
 
-    SetFilePointer(device->hDevice, offset, NULL, FILE_BEGIN);
+    if (writtencount != nullptr)
+        *writtencount = 0;
+
+    std::lock_guard<std::mutex> lock(device->mutex);
+    ZeroMemory(&device->overlapped, sizeof(device->overlapped));
+    device->overlapped.Offset = offset;
+
+    if (!ResetEvent(device->hEvent))
+        return md_status_failure;
+
     DWORD BytesWritten = 0;
-    BOOL b = WriteFile(device->hDevice, buffer, count, &BytesWritten, NULL);
+    BOOL b = WriteFile(device->hDevice, buffer, count, NULL, &device->overlapped);
+    if (!b && GetLastError() != ERROR_IO_PENDING)
+        return md_status_failure;
+
+    if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesWritten, TRUE))
+        return md_status_failure;
 
     if (writtencount != nullptr)
         *writtencount = BytesWritten;
-    return b ? md_status_success : md_status_failure;
+    return md_status_success;
 }
-md_status_e md_read_register(md_handle_t device, md_register_e r, uint32_t* value)
+
+md_status_e md_read_register_raw(md_handle_t device, uint32_t address, uint32_t* value)
 {
-    if (device == nullptr || r < md_register_pc || r > md_register_ra)
+    if (device == nullptr || value == nullptr)
         return md_status_invalid_arg;
 
     PCIE_MIPS_WRITE_REG_DATA data;
     ZeroMemory(&data, sizeof(data));
-    data.address = 0x80 + r;
+    data.address = address;
+
+    std::lock_guard<std::mutex> lock(device->mutex);
+    ZeroMemory(&device->overlapped, sizeof(device->overlapped));
+
+    if (!ResetEvent(device->hEvent))
+        return md_status_failure;
+
     DWORD BytesReturned = 0;
-    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_READ_REG, &data, sizeof(data), &data, sizeof(data), &BytesReturned, NULL);
+    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_READ_REG, &data, sizeof(data), &data, sizeof(data), NULL, &device->overlapped);
+    if (!b && GetLastError() != ERROR_IO_PENDING)
+        return md_status_failure;
+
+    if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesReturned, TRUE))
+        return md_status_failure;
+
     *value = data.value;
-    return b ? md_status_success : md_status_failure;
+    return md_status_success;
 }
-md_status_e md_write_register(md_handle_t device, md_register_e r, uint32_t value)
-{
-    if (device == nullptr || r < md_register_pc || r > md_register_ra)
-        return md_status_invalid_arg;
-
-    PCIE_MIPS_WRITE_REG_DATA data;
-    ZeroMemory(&data, sizeof(data));
-    data.address = 0x80 + r;
-    data.value = value;
-    DWORD BytesReturned = 0;
-    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_WRITE_REG, &data, sizeof(data), NULL, 0, &BytesReturned, NULL);
-    return b ? md_status_success : md_status_failure;
-}
-md_status_e MD_API md_get_state(md_handle_t device, md_state_e* state)
-{
-    if (device == nullptr || state == nullptr)
-        return md_status_invalid_arg;
-
-    PCIE_MIPS_WRITE_REG_DATA data;
-    ZeroMemory(&data, sizeof(data));
-    data.address = 0;
-    DWORD BytesReturned = 0;
-    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_READ_REG, &data, sizeof(data), &data, sizeof(data), &BytesReturned, NULL);
-    *state = (md_state_e)data.value;
-    return b ? md_status_success : md_status_failure;
-}
-md_status_e MD_API md_set_state(md_handle_t device, md_state_e state)
+md_status_e md_write_register_raw(md_handle_t device, uint32_t address, uint32_t value)
 {
     if (device == nullptr)
         return md_status_invalid_arg;
 
     PCIE_MIPS_WRITE_REG_DATA data;
     ZeroMemory(&data, sizeof(data));
-    data.address = 0;
-    data.value = state;
+    data.address = address;
+    data.value = value;
+
+    std::lock_guard<std::mutex> lock(device->mutex);
+    ZeroMemory(&device->overlapped, sizeof(device->overlapped));
+
+    if (!ResetEvent(device->hEvent))
+        return md_status_failure;
+
     DWORD BytesReturned = 0;
-    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_WRITE_REG, &data, sizeof(data), NULL, 0, &BytesReturned, NULL);
-    return b ? md_status_success : md_status_failure;
+    BOOL b = DeviceIoControl(device->hDevice, PCIE_MIPS_IOCTRL_WRITE_REG, &data, sizeof(data), NULL, 0, NULL, &device->overlapped);
+    if (!b && GetLastError() != ERROR_IO_PENDING)
+        return md_status_failure;
+
+    if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesReturned, TRUE))
+        return md_status_failure;
+
+    return md_status_success;
+}
+
+md_status_e md_read_register(md_handle_t device, md_register_e r, uint32_t* value)
+{
+    if (device == nullptr || r < md_register_pc || r > md_register_ra || value == nullptr)
+        return md_status_invalid_arg;
+
+    return md_read_register_raw(device, ((uint32_t)r) + 0x80, value);
+}
+md_status_e md_write_register(md_handle_t device, md_register_e r, uint32_t value)
+{
+    if (device == nullptr || r < md_register_pc || r > md_register_ra)
+        return md_status_invalid_arg;
+
+    return md_write_register_raw(device, ((uint32_t)r) + 0x80, value);
+}
+md_status_e MD_API md_get_state(md_handle_t device, md_state_e* state)
+{
+    if (device == nullptr || state == nullptr)
+        return md_status_invalid_arg;
+
+    uint32_t value = 0;
+    md_status_e status = md_read_register_raw(device, 0, &value);
+    *state = (md_state_e)value;
+    return status;
+}
+md_status_e MD_API md_set_state(md_handle_t device, md_state_e state)
+{
+    if (device == nullptr)
+        return md_status_invalid_arg;
+
+    return md_write_register_raw(device, 0, (uint32_t)state);
 }
 void md_close(md_handle_t device)
 {
     destroy_breakpoint_callbacks(device);
+    if (device->hDevice && device->hDevice != INVALID_HANDLE_VALUE)
+        CloseHandle(device->hDevice);
+    if (device->hEvent)
+        CloseHandle(device->hEvent);
     delete device;
 }
