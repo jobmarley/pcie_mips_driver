@@ -58,6 +58,7 @@ extern "C"
 		md_status_success = 0,
 		md_status_invalid_arg,
 		md_status_failure,
+		md_status_access_denied,
 	} md_status_e;
 
 	typedef enum
@@ -66,7 +67,7 @@ extern "C"
 		md_state_enabled = 0x1,
 	} md_state_e;
 
-	MD_EXPORT md_handle_t MD_API md_open();
+	MD_EXPORT md_status_e MD_API md_open(md_handle_t* device);
 	MD_EXPORT md_status_e MD_API md_register_callback(md_handle_t device, md_callback_t c);
 	MD_EXPORT md_status_e MD_API md_unregister_callback(md_handle_t device, md_callback_t c);
 	MD_EXPORT md_status_e MD_API md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* readcount);

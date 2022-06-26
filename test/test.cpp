@@ -105,15 +105,16 @@ void BreakpointCallback(md_event_e e)
 }
 int main()
 {
-    md_handle_t device = md_open();
-    if (!device)
+    md_handle_t device = nullptr;
+    md_status_e status = md_open(&device);
+    if (status != md_status_success)
     {
-        std::cout << "md_open failed" << std::endl;
+        std::cout << "md_open returned 0x" << std::hex << std::setfill('0') << status << std::endl;
         return 1;
     }
     std::cout << "md_open completed successfully, handle: 0x" << std::hex << std::setfill('0') << device << std::endl;
 
-    md_status_e status = md_register_callback(device, BreakpointCallback);
+    status = md_register_callback(device, BreakpointCallback);
     if (status != md_status_success)
     {
         std::cout << "md_register_callback returned 0x" << std::hex << std::setfill('0') << status << std::endl;

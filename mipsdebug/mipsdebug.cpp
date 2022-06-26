@@ -61,8 +61,14 @@ BOOL FindBestInterface(HDEVINFO DeviceInfoSet, PSP_DEVINFO_DATA pDeviceInfoData,
 
     return TRUE;
 }
-md_handle_t md_open()
+md_status_e md_open(md_handle_t* device)
 {
+    if (!device)
+        return md_status_invalid_arg;
+
+    *device = nullptr;
+    md_status_e status = md_status_success;
+
     HDEVINFO DeviceInfoSet = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_pciemipsdriver, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
 
     SP_DEVINFO_DATA DeviceInfoData;
@@ -70,7 +76,6 @@ md_handle_t md_open()
     DeviceInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
     ULONG DeviceIndex = 0;
 
-    md_handle* handle = nullptr;
     HANDLE hFile = NULL;
 
     while (SetupDiEnumDeviceInfo(
@@ -85,21 +90,24 @@ md_handle_t md_open()
         {
             std::wstring devicePath = GetInterfacePath(DeviceInfoSet, &DeviceInterfaceData);
             hFile = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
-            
+            if (hFile == NULL || hFile == INVALID_HANDLE_VALUE)
+                status = (GetLastError() == ERROR_ACCESS_DENIED) ? md_status_access_denied : md_status_failure;
             break;
         }
     }
 
     HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (hEvent == NULL || hEvent == INVALID_HANDLE_VALUE)
+        status = md_status_failure;
 
     if (DeviceInfoSet) {
         SetupDiDestroyDeviceInfoList(DeviceInfoSet);
     }
     if (hFile != INVALID_HANDLE_VALUE && hEvent != NULL)
     {
-        handle = new md_handle;
-        handle->hDevice = hFile;
-        handle->hEvent = hEvent;
+        *device = new md_handle;
+        (*device)->hDevice = hFile;
+        (*device)->hEvent = hEvent;
     }
     else
     {
@@ -109,7 +117,7 @@ md_handle_t md_open()
             CloseHandle(hEvent);
     }
 
-    return handle;
+    return status;
 }
 
 
