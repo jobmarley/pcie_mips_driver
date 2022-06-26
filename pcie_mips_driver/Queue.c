@@ -203,7 +203,7 @@ pciemipsdriverEvtIoDeviceControl(
         }
         // If we actually have a power of 2 registers on the device, the address on the AXI bus would just wrap around if OOB
         // if not I don't really know what happens... the write would probably fail, IDK how the CPU would react to that
-        if ((data->address & 0x3)) // lets check for alignment as well
+        if ((data->address & 0x3) || (data->address > (deviceContext->Bar0Size - 4))) // lets check for alignment as well
         {
             WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
             return;
@@ -231,7 +231,7 @@ pciemipsdriverEvtIoDeviceControl(
         }
         // If we actually have a power of 2 registers on the device, the address on the AXI bus would just wrap around if OOB
         // if not I don't really know what happens... the write would probably fail, IDK how the CPU would react to that
-        if ((dataIn->address & 0x3)) // lets check for alignment as well
+        if ((dataIn->address & 0x3) || (dataIn->address > (deviceContext->Bar0Size - 4))) // lets check for alignment as well
         {
             WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
             return;
