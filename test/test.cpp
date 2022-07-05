@@ -53,10 +53,10 @@ bool ToUInt8Hex(const std::string& s, uint8_t* p)
     *p = (uint8_t)i;
     return idx == s.size() && s.size() == 2 && i >= 0 && i <= 0xFF;
 }
-bool ReadDataLine(std::vector<uint8_t>& buffer, int ofs)
+bool ReadDataLine(std::vector<uint8_t>& buffer, int ofs, int count)
 {
-    std::string parts[16];
-    for (int i = 0; i < 16; ++i)
+    std::vector<std::string> parts(count);
+    for (int i = 0; i < parts.size(); ++i)
         std::cin >> parts[i];
 
     for (auto s : parts)
@@ -206,11 +206,9 @@ int main()
             }
 
             std::vector<uint8_t> buffer(size);
-            for (int i = 0; i < size / 16; ++i)
-            {
-                if (!ReadDataLine(buffer, i * 16))
-                    continue;
-            }
+            if (!ReadDataLine(buffer, 0, size))
+                continue;
+
             writemem(device, buffer, (uint32_t)offset);
         }
         else if (cmd == "writetest")
