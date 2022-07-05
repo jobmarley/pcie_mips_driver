@@ -29,6 +29,8 @@ struct md_handle
 #define PCIE_MIPS_IOCTRL_READ_REG 0x2
 #define PCIE_MIPS_IOCTRL_WAIT_BREAK 0x3
 
+#define MEMORY_SIZE 0x40000000
+
 struct PCIE_MIPS_WRITE_REG_DATA
 {
     uint64_t address;
@@ -243,11 +245,16 @@ md_status_e md_unregister_callback(md_handle_t device, md_callback_t c)
 }
 md_status_e md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* readcount)
 {
-    if (device == nullptr || buffer == nullptr || count == 0)
+    if (device == nullptr || buffer == nullptr || count == 0 || offset >= MEMORY_SIZE)
         return md_status_invalid_arg;
 
     if (readcount != nullptr)
         *readcount = 0;
+
+    // Make sure we dont read out of bounds
+    count = min(count, MEMORY_SIZE);
+    if (MEMORY_SIZE - count < offset)
+        count = MEMORY_SIZE - offset;
 
     std::lock_guard<std::mutex> lock(device->mutex);
     ZeroMemory(&device->overlapped, sizeof(device->overlapped));
@@ -256,13 +263,37 @@ md_status_e md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, 
     if (!ResetEvent(device->hEvent))
         return md_status_failure;
 
+    // There is an error when reading 5 bytes or less... I don't understand why.
+    // It returns garbage (00 00 1C..., always?). There is no error on the DMA engine
+    // and it doesnt seem related to alignment so I need this workaround
+    // This doesnt happen with write. Maybe this is related to driver memory alignment?
     DWORD BytesRead = 0;
-    BOOL b = ReadFile(device->hDevice, buffer, count, NULL, &device->overlapped);
-    if (!b && GetLastError() != ERROR_IO_PENDING)
-        return md_status_failure;
+    if (count <= 8)
+    {
+        uint8_t smallBuffer[16] = {};
 
-    if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesRead, TRUE))
-        return md_status_failure;
+        uint32_t alignedOffset = min(offset & ~(uint32_t)7, 0x40000000 - 16);
+        device->overlapped.Offset = alignedOffset;
+        BOOL b = ReadFile(device->hDevice, smallBuffer, 16, NULL, &device->overlapped);
+        if (!b && GetLastError() != ERROR_IO_PENDING)
+            return md_status_failure;
+
+        if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesRead, TRUE))
+            return md_status_failure;
+
+        BytesRead = min(BytesRead, count);
+
+        memcpy(buffer, &smallBuffer[offset - alignedOffset], BytesRead);
+    }
+    else
+    {
+        BOOL b = ReadFile(device->hDevice, buffer, count, NULL, &device->overlapped);
+        if (!b && GetLastError() != ERROR_IO_PENDING)
+            return md_status_failure;
+
+        if (!GetOverlappedResult(device->hDevice, &device->overlapped, &BytesRead, TRUE))
+            return md_status_failure;
+    }
 
     if (readcount != nullptr)
         *readcount = BytesRead;
@@ -270,11 +301,16 @@ md_status_e md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, 
 }
 md_status_e md_write_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* writtencount)
 {
-    if (device == nullptr || buffer == nullptr || count == 0)
+    if (device == nullptr || buffer == nullptr || count == 0 || offset >= MEMORY_SIZE)
         return md_status_invalid_arg;
 
     if (writtencount != nullptr)
         *writtencount = 0;
+
+    // Make sure we dont write out of bounds
+    count = min(count, MEMORY_SIZE);
+    if (MEMORY_SIZE - count < offset)
+        count = MEMORY_SIZE - offset;
 
     std::lock_guard<std::mutex> lock(device->mutex);
     ZeroMemory(&device->overlapped, sizeof(device->overlapped));
