@@ -218,7 +218,7 @@ int main()
             }
 
             std::vector<uint8_t> buffer(size);
-            if (!ReadDataLine(buffer, 0, size))
+            if (!ReadDataLine(buffer, 0, (int)size))
                 continue;
 
             writemem(device, buffer, (uint32_t)offset);
@@ -274,6 +274,35 @@ int main()
             md_status_e status = md_write_register(device, (md_register_e)address, (uint32_t)value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << std::endl;
         }
+        else if (cmd == "writecop0reg")
+        {
+            if (params.size() != 4)
+            {
+                std::cout << "wrong args" << std::endl;
+                continue;
+            }
+
+            uint64_t address = 0;
+            if (!ToUInt64(params[1], &address))
+            {
+                std::cout << "wrong address" << std::endl;
+                continue;
+            }
+            uint64_t sel = 0;
+            if (!ToUInt64(params[2], &sel))
+            {
+                std::cout << "wrong sel" << std::endl;
+                continue;
+            }
+            uint64_t value = 0;
+            if (!ToUInt64(params[3], &value) || value > 0xFFFFFFFF)
+            {
+                std::cout << "wrong value" << std::endl;
+                continue;
+            }
+            md_status_e status = md_write_cop0_register(device, (uint8_t)address, (uint8_t)sel, (uint32_t)value);
+            std::cout << "result : 0x" << std::hex << std::setw(8) << status << std::endl;
+        }
         else if (cmd == "readreg")
         {
             if (params.size() != 2)
@@ -290,6 +319,30 @@ int main()
             }
             uint32_t value = 0;
             md_status_e status = md_read_register(device, (md_register_e)address, &value);
+            std::cout << "result : 0x" << std::hex << std::setw(8) << status << ", value : 0x" << std::hex << std::setw(8) << value << std::endl;
+        }
+        else if (cmd == "readcop0reg")
+        {
+            if (params.size() != 3)
+            {
+                std::cout << "wrong args" << std::endl;
+                continue;
+            }
+
+            uint64_t address = 0;
+            if (!ToUInt64(params[1], &address))
+            {
+                std::cout << "wrong address" << std::endl;
+                continue;
+            }
+            uint64_t sel = 0;
+            if (!ToUInt64(params[2], &sel))
+            {
+                std::cout << "wrong sel" << std::endl;
+                continue;
+            }
+            uint32_t value = 0;
+            md_status_e status = md_read_cop0_register(device, (uint8_t)address, (uint8_t)sel, &value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << ", value : 0x" << std::hex << std::setw(8) << value << std::endl;
         }
         else if (cmd == "setstate")

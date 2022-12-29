@@ -73,7 +73,9 @@ extern "C"
 	MD_EXPORT md_status_e MD_API md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* readcount);
 	MD_EXPORT md_status_e MD_API md_write_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* writtencount);
 	MD_EXPORT md_status_e MD_API md_read_register(md_handle_t device, md_register_e r, uint32_t* value);
+	MD_EXPORT md_status_e MD_API md_read_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t* value);
 	MD_EXPORT md_status_e MD_API md_write_register(md_handle_t device, md_register_e r, uint32_t value);
+	MD_EXPORT md_status_e MD_API md_write_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t value);
 	MD_EXPORT md_status_e MD_API md_get_state(md_handle_t device, md_state_e* state);
 	MD_EXPORT md_status_e MD_API md_set_state(md_handle_t device, md_state_e state);
 	MD_EXPORT void MD_API md_close(md_handle_t device);
