@@ -397,33 +397,49 @@ md_status_e md_write_register_raw(md_handle_t device, uint32_t address, uint32_t
     return md_status_success;
 }
 
-md_status_e md_read_register(md_handle_t device, md_register_e r, uint32_t* value)
+md_status_e md_read_register(md_handle_t device, md_register_e r, uint8_t sel, uint32_t* value)
 {
-    if (device == nullptr || r < md_register_pc || r > md_register_ra || value == nullptr)
+    if (device == nullptr || value == nullptr)
         return md_status_invalid_arg;
 
-    return md_read_register_raw(device, 0x80 | (((uint32_t)r & 0x1F) << 2), value);
+    if (r >= md_register_pc && r <= md_register_ra)
+    {
+        if (sel != 0)
+            return md_status_invalid_arg;
+        return md_read_register_raw(device, 0x80 | (((uint32_t)r & 0x1F) << 2), value);
+    }
+    else if (r >= md_register_cop0_r0 && r <= md_register_cop0_r31)
+    {
+        if (sel > 7)
+            return md_status_invalid_arg;
+        return md_read_register_raw(device, (((uint32_t)sel & 0x7) << 9) | 0x100 | ((((uint32_t)r - 32) & 0x1F) << 2), value);
+    }
+    else
+    {
+        return md_status_invalid_arg;
+    }
 }
-md_status_e md_read_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t* value)
+md_status_e md_write_register(md_handle_t device, md_register_e r, uint8_t sel, uint32_t value)
 {
-    if (device == nullptr || r < md_register_pc || r > md_register_ra || value == nullptr)
+    if (device == nullptr)
         return md_status_invalid_arg;
 
-    return md_read_register_raw(device, (((uint32_t)sel & 0x7) << 9) | 0x100 | (((uint32_t)r & 0x1F) << 2), value);
-}
-md_status_e md_write_register(md_handle_t device, md_register_e r, uint32_t value)
-{
-    if (device == nullptr || r < md_register_pc || r > md_register_ra)
+    if (r >= md_register_pc && r <= md_register_ra)
+    {
+        if (sel != 0)
+            return md_status_invalid_arg;
+        return md_write_register_raw(device, 0x80 | (((uint32_t)r & 0x1F) << 2), value);
+    }
+    else if (r >= md_register_cop0_r0 && r <= md_register_cop0_r31)
+    {
+        if (sel > 7)
+            return md_status_invalid_arg;
+        return md_write_register_raw(device, (((uint32_t)sel & 0x7) << 9) | 0x100 | ((((uint32_t)r - 32) & 0x1F) << 2), value);
+    }
+    else
+    {
         return md_status_invalid_arg;
-
-    return md_write_register_raw(device, 0x80 | (((uint32_t)r & 0x1F) << 2), value);
-}
-md_status_e md_write_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t value)
-{
-    if (device == nullptr || r < md_register_pc || r > md_register_ra)
-        return md_status_invalid_arg;
-
-    return md_write_register_raw(device, (((uint32_t)sel & 0x7) << 9) | 0x100 | (((uint32_t)r & 0x1F) << 2), value);
+    }
 }
 md_status_e MD_API md_get_state(md_handle_t device, md_state_e* state)
 {

@@ -271,7 +271,7 @@ int main()
                 std::cout << "wrong value" << std::endl;
                 continue;
             }
-            md_status_e status = md_write_register(device, (md_register_e)address, (uint32_t)value);
+            md_status_e status = md_write_register(device, (md_register_e)address, 0, (uint32_t)value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << std::endl;
         }
         else if (cmd == "writecop0reg")
@@ -300,7 +300,7 @@ int main()
                 std::cout << "wrong value" << std::endl;
                 continue;
             }
-            md_status_e status = md_write_cop0_register(device, (uint8_t)address, (uint8_t)sel, (uint32_t)value);
+            md_status_e status = md_write_register(device, (md_register_e)(md_register_cop0_r0 + address), (uint8_t)sel, (uint32_t)value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << std::endl;
         }
         else if (cmd == "readreg")
@@ -318,7 +318,7 @@ int main()
                 continue;
             }
             uint32_t value = 0;
-            md_status_e status = md_read_register(device, (md_register_e)address, &value);
+            md_status_e status = md_read_register(device, (md_register_e)address, 0, &value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << ", value : 0x" << std::hex << std::setw(8) << value << std::endl;
         }
         else if (cmd == "readcop0reg")
@@ -342,7 +342,7 @@ int main()
                 continue;
             }
             uint32_t value = 0;
-            md_status_e status = md_read_cop0_register(device, (uint8_t)address, (uint8_t)sel, &value);
+            md_status_e status = md_read_register(device, (md_register_e)(md_register_cop0_r0 + address), (uint8_t)sel, &value);
             std::cout << "result : 0x" << std::hex << std::setw(8) << status << ", value : 0x" << std::hex << std::setw(8) << value << std::endl;
         }
         else if (cmd == "setstate")

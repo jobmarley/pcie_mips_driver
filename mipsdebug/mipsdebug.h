@@ -50,6 +50,38 @@ extern "C"
 		md_register_sp = 29,
 		md_register_fp = 30,
 		md_register_ra = 31,
+		md_register_cop0_r0 = 32,
+		md_register_cop0_r1 = 33,
+		md_register_cop0_r2 = 34,
+		md_register_cop0_r3 = 35,
+		md_register_cop0_r4 = 36,
+		md_register_cop0_r5 = 37,
+		md_register_cop0_r6 = 38,
+		md_register_cop0_r7 = 39,
+		md_register_cop0_r8 = 40,
+		md_register_cop0_r9 = 41,
+		md_register_cop0_r10 = 42,
+		md_register_cop0_r11 = 43,
+		md_register_cop0_r12 = 44,
+		md_register_cop0_r13 = 45,
+		md_register_cop0_r14 = 46,
+		md_register_cop0_r15 = 47,
+		md_register_cop0_r16 = 48,
+		md_register_cop0_r17 = 49,
+		md_register_cop0_r18 = 50,
+		md_register_cop0_r19 = 51,
+		md_register_cop0_r20 = 52,
+		md_register_cop0_r21 = 53,
+		md_register_cop0_r22 = 54,
+		md_register_cop0_r23 = 55,
+		md_register_cop0_r24 = 56,
+		md_register_cop0_r25 = 57,
+		md_register_cop0_r26 = 58,
+		md_register_cop0_r27 = 59,
+		md_register_cop0_r28 = 60,
+		md_register_cop0_r29 = 61,
+		md_register_cop0_r30 = 62,
+		md_register_cop0_r31 = 63,
 
 	} md_register_e;
 
@@ -72,10 +104,8 @@ extern "C"
 	MD_EXPORT md_status_e MD_API md_unregister_callback(md_handle_t device, md_callback_t c);
 	MD_EXPORT md_status_e MD_API md_read_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* readcount);
 	MD_EXPORT md_status_e MD_API md_write_memory(md_handle_t device, uint8_t* buffer, uint32_t count, uint32_t offset, uint32_t* writtencount);
-	MD_EXPORT md_status_e MD_API md_read_register(md_handle_t device, md_register_e r, uint32_t* value);
-	MD_EXPORT md_status_e MD_API md_read_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t* value);
-	MD_EXPORT md_status_e MD_API md_write_register(md_handle_t device, md_register_e r, uint32_t value);
-	MD_EXPORT md_status_e MD_API md_write_cop0_register(md_handle_t device, uint8_t r, uint8_t sel, uint32_t value);
+	MD_EXPORT md_status_e MD_API md_read_register(md_handle_t device, md_register_e r, uint8_t sel, uint32_t* value);
+	MD_EXPORT md_status_e MD_API md_write_register(md_handle_t device, md_register_e r, uint8_t sel, uint32_t value);
 	MD_EXPORT md_status_e MD_API md_get_state(md_handle_t device, md_state_e* state);
 	MD_EXPORT md_status_e MD_API md_set_state(md_handle_t device, md_state_e state);
 	MD_EXPORT void MD_API md_close(md_handle_t device);
